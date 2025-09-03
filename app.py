@@ -1,14 +1,14 @@
 import streamlit as st
-from main import scan_environment  # Import the main scanning function
+from main import process_image  # Import the new processing function
 from gtts import gTTS
 import io
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Blind Navigation Assistant", page_icon="🧑‍🦯")
-st.title("🧑‍🦯 Blind Navigation Assistant")
-st.write("Press the button below to scan the environment for 3 seconds.")
+st.set_page_config(page_title="Raahi Navigation Assistant", page_icon="🧑‍🦯")
+st.title("🧑‍🦯 Raahi - Navigation Assistant")
+st.write("Use the camera below to take a picture of your surroundings.")
 
-# --- Helper Functions ---
+# --- Text-to-Speech Function ---
 def speak_text(sentence):
     """Converts text to speech and plays it in the browser."""
     st.write(f"Speaking summary: '{sentence}'")
@@ -22,42 +22,32 @@ def speak_text(sentence):
         st.error(f"Could not generate audio: {e}")
 
 # --- Main Application Logic ---
-if st.button("Scan Environment", key="scan_button"):
+# Use the camera input widget to get an image from the user's browser
+img_file_buffer = st.camera_input("Take a picture")
+
+if img_file_buffer is not None:
+    st.info("📷 Analyzing picture...")
     
-    # Use a spinner to show the app is busy during the scan
-    with st.spinner("📷 Scanning environment for 3 seconds... Please wait."):
-        # The entire detection logic is now handled by this single function call
-        detected_objects_full = scan_environment(duration=3)
+    # The browser sends the image data to the server, which we process
+    detected_objects = process_image(img_file_buffer)
+    
+    st.success("✅ Analysis Complete!")
 
-    st.success("✅ Scan Complete!")
+    # --- Summarization Logic ---
+    if detected_objects:
+        # Create a unique list while preserving order
+        unique_summaries = list(dict.fromkeys(detected_objects))
 
-    # --- Summarization Logic (Processes the results from scan_environment) ---
-    if detected_objects_full:
-        # Summarize by object and position, ignoring distance
-        unique_summaries = []
-        seen_summaries = set()
-        for full_desc in detected_objects_full:
-            parts = full_desc.split(' ')
-            label = parts[0]
-            position_part = " ".join(parts[-3:])  # "at your <position>"
-            summary_key = f"{label} {position_part}"
-
-            if summary_key not in seen_summaries:
-                unique_summaries.append(f"a {summary_key}")
-                seen_summaries.add(summary_key)
-
-        # Display the summarized list
         st.write("Detected Objects:")
         for summary in unique_summaries:
             st.write(f"- {summary.capitalize()}")
 
-        # Build the sentence from the summarized list
+        # Build the sentence for TTS
         if len(unique_summaries) == 1:
             sentence = f"I see {unique_summaries[0]}."
         else:
             sentence = "I see " + ", ".join(unique_summaries[:-1]) + f", and {unique_summaries[-1]}."
-
-        # Play the short sentence as audio
+        
         speak_text(sentence)
     else:
         st.warning("⚠️ No objects detected.")

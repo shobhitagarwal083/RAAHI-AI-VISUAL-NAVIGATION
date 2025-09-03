@@ -1,27 +1,18 @@
 import cv2
 import torch
-import time
-import streamlit as st  # <-- Add this import
+import streamlit as st
+import numpy as np
+from PIL import Image
 
-# -------------------------------
-# Cached function to load the YOLOv5 model
-# -------------------------------
+# Use Streamlit's caching to load the model only once
 @st.cache_resource
 def load_model():
-    """
-    Loads and caches the YOLOv5 model to prevent reloading on every run.
-    """
+    """Loads and caches the YOLOv5 model."""
     model = torch.hub.load('ultralytics/yolov5', 'yolov5s', trust_repo=True)
     return model
 
-# -------------------------------
-# Helper functions
-# -------------------------------
-
 def get_position(x, frame_width):
-    """
-    Returns horizontal position of object based on x-coordinate.
-    """
+    """Returns the horizontal position of an object."""
     if x < frame_width / 3:
         return "left"
     elif x < 2 * frame_width / 3:
@@ -29,78 +20,38 @@ def get_position(x, frame_width):
     else:
         return "right"
 
-def get_distance(y, frame_height):
+def process_image(image_data):
     """
-    Estimates approximate distance of object from camera using y-coordinate.
+    Processes a single image to detect objects and returns descriptions.
     """
-    ratio = y / frame_height
-    if ratio > 0.75:
-        return "very close"
-    elif ratio > 0.55:
-        return "close"
-    elif ratio > 0.35:
-        return "a bit far"
-    else:
-        return "far away"
-
-# -------------------------------
-# Main scanning function
-# -------------------------------
-
-def scan_environment(duration=3, max_objects=6, min_conf=0.4):
-    """
-    Scans the environment using webcam for a given duration (seconds).
-    Returns a list of detected object descriptions.
-    """
-    # Load the model using the cached function
     model = load_model()
-
-    cap = cv2.VideoCapture(0)
-    # Check if the camera opened successfully
-    if not cap.isOpened():
-        st.error("Error: Could not open webcam.")
-        return []
-        
-    start_time = time.time()
+    
+    # Convert the uploaded image data to an OpenCV-compatible format
+    pil_image = Image.open(image_data)
+    frame = np.array(pil_image)
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    
+    frame_height, frame_width = frame.shape[:2]
+    
+    # Run object detection
+    results = model(frame)
+    detections = results.xyxy[0]
+    
     detected_objects = []
+    if len(detections) > 0:
+        # Sort detections by confidence score
+        detections = detections[detections[:, 4].argsort(descending=True)]
+        
+        for *box, conf, cls in detections[:6]: # Process top 6 objects
+            if conf < 0.4:
+                continue
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            continue
-
-        if time.time() - start_time > duration:
-            break
-
-        frame_height, frame_width = frame.shape[:2]
-        results = model(frame)
-        detections = results.xyxy[0]
-
-        if len(detections) > 0:
-            detections = detections[detections[:, 4].argsort(descending=True)]
-            for *box, conf, cls in detections[:max_objects]:
-                if conf < min_conf:
-                    continue
-
-                x1, y1, x2, y2 = map(int, box)
-                label = model.names[int(cls)]
-                obj_center_x = (x1 + x2) // 2
-                obj_center_y = (y1 + y2) // 2
-
-                position = get_position(obj_center_x, frame_width)
-                distance = get_distance(obj_center_y, frame_height)
-
-                description = f"{label} {distance} at your {position}"
-                detected_objects.append(description)
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-    unique_objects = []
-    seen = set()
-    for obj in detected_objects:
-        if obj not in seen:
-            unique_objects.append(obj)
-            seen.add(obj)
-
-    return unique_objects
+            label = model.names[int(cls)]
+            x1, y1, x2, y2 = map(int, box)
+            obj_center_x = (x1 + x2) // 2
+            position = get_position(obj_center_x, frame_width)
+            
+            description = f"a {label} at your {position}"
+            detected_objects.append(description)
+            
+    return detected_objects
