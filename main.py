@@ -2,7 +2,6 @@ import cv2
 import torch
 import streamlit as st
 import numpy as np
-from PIL import Image
 
 # Use Streamlit's caching to load the model only once
 @st.cache_resource
@@ -20,18 +19,23 @@ def get_position(x, frame_width):
     else:
         return "right"
 
-def process_image(image_data):
+def get_distance(y, frame_height):
+    """Estimates the approximate distance of an object."""
+    ratio = y / frame_height
+    if ratio > 0.75:
+        return "very close"
+    elif ratio > 0.55:
+        return "close"
+    elif ratio > 0.35:
+        return "a bit far"
+    else:
+        return "far away"
+
+def process_video_frame(frame: np.ndarray):
     """
-    Processes a single image to detect objects and returns descriptions.
+    Processes a single video frame to detect objects, draw boxes, and return descriptions.
     """
     model = load_model()
-    
-    # Convert the uploaded image data to an OpenCV-compatible format
-    pil_image = Image.open(image_data)
-    frame = np.array(pil_image)
-    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    
-    frame_height, frame_width = frame.shape[:2]
     
     # Run object detection
     results = model(frame)
@@ -39,7 +43,7 @@ def process_image(image_data):
     
     detected_objects = []
     if len(detections) > 0:
-        # Sort detections by confidence score
+        # Sort detections by confidence
         detections = detections[detections[:, 4].argsort(descending=True)]
         
         for *box, conf, cls in detections[:6]: # Process top 6 objects
@@ -49,9 +53,17 @@ def process_image(image_data):
             label = model.names[int(cls)]
             x1, y1, x2, y2 = map(int, box)
             obj_center_x = (x1 + x2) // 2
-            position = get_position(obj_center_x, frame_width)
+            obj_center_y = (y1 + y2) // 2
+
+            # Get position and distance
+            position = get_position(obj_center_x, frame.shape[1])
+            distance = get_distance(obj_center_y, frame.shape[0])
             
-            description = f"a {label} at your {position}"
+            description = f"{label} {distance} at your {position}"
             detected_objects.append(description)
             
-    return detected_objects
+            # Draw bounding boxes and labels on the frame
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (36, 255, 12), 2)
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (36, 255, 12), 2)
+            
+    return frame, detected_objects
