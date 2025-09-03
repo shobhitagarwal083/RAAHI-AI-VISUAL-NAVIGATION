@@ -1,12 +1,18 @@
 import cv2
 import torch
 import time
+import streamlit as st  # <-- Add this import
 
 # -------------------------------
-# Load YOLOv5 model
+# Cached function to load the YOLOv5 model
 # -------------------------------
-# Uses the pretrained 'yolov5s' model from Ultralytics hub
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+@st.cache_resource
+def load_model():
+    """
+    Loads and caches the YOLOv5 model to prevent reloading on every run.
+    """
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', trust_repo=True)
+    return model
 
 # -------------------------------
 # Helper functions
@@ -15,9 +21,6 @@ model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 def get_position(x, frame_width):
     """
     Returns horizontal position of object based on x-coordinate.
-    - left: left third
-    - center: middle third
-    - right: right third
     """
     if x < frame_width / 3:
         return "left"
@@ -29,7 +32,6 @@ def get_position(x, frame_width):
 def get_distance(y, frame_height):
     """
     Estimates approximate distance of object from camera using y-coordinate.
-    Returns one of: "very close", "close", "a bit far", "far away"
     """
     ratio = y / frame_height
     if ratio > 0.75:
@@ -48,9 +50,17 @@ def get_distance(y, frame_height):
 def scan_environment(duration=3, max_objects=6, min_conf=0.4):
     """
     Scans the environment using webcam for a given duration (seconds).
-    Returns a list of unique detected object descriptions.
+    Returns a list of detected object descriptions.
     """
+    # Load the model using the cached function
+    model = load_model()
+
     cap = cv2.VideoCapture(0)
+    # Check if the camera opened successfully
+    if not cap.isOpened():
+        st.error("Error: Could not open webcam.")
+        return []
+        
     start_time = time.time()
     detected_objects = []
 
@@ -59,21 +69,15 @@ def scan_environment(duration=3, max_objects=6, min_conf=0.4):
         if not ret:
             continue
 
-        # Stop scanning after specified duration
         if time.time() - start_time > duration:
             break
 
         frame_height, frame_width = frame.shape[:2]
-
-        # YOLOv5 detection
         results = model(frame)
         detections = results.xyxy[0]
 
         if len(detections) > 0:
-            # Sort by confidence descending
             detections = detections[detections[:, 4].argsort(descending=True)]
-
-            # Process top objects only
             for *box, conf, cls in detections[:max_objects]:
                 if conf < min_conf:
                     continue
@@ -92,7 +96,6 @@ def scan_environment(duration=3, max_objects=6, min_conf=0.4):
     cap.release()
     cv2.destroyAllWindows()
 
-    # Remove duplicates while preserving order
     unique_objects = []
     seen = set()
     for obj in detected_objects:
