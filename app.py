@@ -12,7 +12,7 @@ st.set_page_config(page_title="Raahi Navigation Assistant", page_icon="🧑‍�
 st.title("🧑‍🦯 Raahi - Navigation Assistant")
 
 # --- Application State ---
-# Use session state to store results between reruns
+# Use session state to store information between reruns
 if "detected_objects" not in st.session_state:
     st.session_state.detected_objects = queue.Queue()
 if "is_scanning" not in st.session_state:
@@ -24,10 +24,11 @@ if "scan_completed" not in st.session_state:
 
 # --- Text-to-Speech Function ---
 def speak_text(sentence):
+    """Converts text to speech and plays it in the browser."""
     st.write(f"Speaking summary: '{sentence}'")
     try:
         mp3_fp = io.BytesIO()
-        tts = gTTS(sentence, lang='en')
+        tts = gTTS(sentence, lang='en', slow=False)
         tts.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
         st.audio(mp3_fp, format="audio/mp3", autoplay=True)
@@ -37,7 +38,7 @@ def speak_text(sentence):
 # --- WebRTC Frame Callback ---
 def video_frame_callback(frame: av.VideoFrame):
     """
-    This function is called for each frame from the browser's webcam.
+    This function is called for each frame received from the browser's webcam.
     """
     img = frame.to_ndarray(format="bgr24")
     
@@ -47,12 +48,12 @@ def video_frame_callback(frame: av.VideoFrame):
         if time.time() - st.session_state.scan_start_time > 3:
             st.session_state.is_scanning = False
             st.session_state.scan_completed = True
-            return frame # Return the last frame without processing
+            return frame # Return the frame without processing
             
-        # Run object detection and get the processed frame and detections
+        # Run object detection and get the processed frame with bounding boxes
         processed_frame, detections = process_video_frame(img)
         
-        # Add new detections to our results queue
+        # Add any new detections to our results queue
         for desc in detections:
             st.session_state.detected_objects.put(desc)
             
@@ -63,12 +64,12 @@ def video_frame_callback(frame: av.VideoFrame):
 # --- Main UI ---
 st.write("Click **START** in the component below to begin a 3-second scan of your surroundings.")
 
-# RTC_CONFIGURATION is the fix for the connection error.
+# RTC_CONFIGURATION is the fix for the connection error, using a public STUN server.
 RTC_CONFIGURATION = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-# The WebRTC component that displays the video stream
+# The WebRTC component that displays the video stream from the user's browser
 webrtc_ctx = webrtc_streamer(
     key="raahi-scanner",
     mode=WebRtcMode.SENDRECV,
@@ -82,24 +83,23 @@ webrtc_ctx = webrtc_streamer(
 if webrtc_ctx.state.playing and not st.session_state.is_scanning and not st.session_state.scan_completed:
     st.session_state.is_scanning = True
     st.session_state.scan_start_time = time.time()
-    # Clear previous results
+    # Clear any previous results
     with st.session_state.detected_objects.mutex:
         st.session_state.detected_objects.queue.clear()
     st.info("📷 Scanning for 3 seconds...")
-    # Use a rerun to update the UI immediately
+    # Force a rerun to immediately show the "Scanning..." message
     st.rerun()
 
-# Display results after the scan is marked as completed
+# This logic displays the results after the scan is marked as completed
 if st.session_state.scan_completed:
     st.success("✅ Scan Complete!")
     
-    # Collect all results from the queue
     all_detections = []
     while not st.session_state.detected_objects.empty():
         all_detections.append(st.session_state.detected_objects.get())
         
     if all_detections:
-        # Create a unique list of summaries
+        # Create a unique list of summaries (object + position)
         unique_summaries = []
         seen_summaries = set()
         for full_desc in all_detections:
@@ -113,6 +113,7 @@ if st.session_state.scan_completed:
         for summary in unique_summaries:
             st.write(f"- {summary.capitalize()}")
 
+        # Build and speak the final sentence
         if len(unique_summaries) == 1:
             sentence = f"I see {unique_summaries[0]}."
         else:
@@ -123,6 +124,6 @@ if st.session_state.scan_completed:
         st.warning("⚠️ No objects detected.")
         speak_text("I did not detect any objects.")
     
-    # Reset the state so the user can scan again
+    # Reset the state so the user can perform a new scan
     st.session_state.scan_completed = False
     st.session_state.scan_start_time = 0
