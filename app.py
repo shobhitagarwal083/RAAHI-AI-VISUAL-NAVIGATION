@@ -5,7 +5,7 @@ import io
 import av
 import queue
 import time
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Raahi Navigation Assistant", page_icon="🧑‍🦯")
@@ -19,6 +19,8 @@ if "is_scanning" not in st.session_state:
     st.session_state.is_scanning = False
 if "scan_start_time" not in st.session_state:
     st.session_state.scan_start_time = 0
+if "scan_completed" not in st.session_state:
+    st.session_state.scan_completed = False
 
 # --- Text-to-Speech Function ---
 def speak_text(sentence):
@@ -39,16 +41,18 @@ def video_frame_callback(frame: av.VideoFrame):
     """
     img = frame.to_ndarray(format="bgr24")
     
+    # Process frames only when scanning is active
     if st.session_state.is_scanning:
-        # Check if the 3-second scan duration has passed
+        # Stop scanning after 3 seconds
         if time.time() - st.session_state.scan_start_time > 3:
             st.session_state.is_scanning = False
-            return frame # Stop processing
+            st.session_state.scan_completed = True
+            return frame # Return the last frame without processing
             
-        # Process the frame for object detection
+        # Run object detection and get the processed frame and detections
         processed_frame, detections = process_video_frame(img)
         
-        # Add new detections to the queue
+        # Add new detections to our results queue
         for desc in detections:
             st.session_state.detected_objects.put(desc)
             
@@ -57,28 +61,36 @@ def video_frame_callback(frame: av.VideoFrame):
         return frame
 
 # --- Main UI ---
-st.write("Press 'Start Scan' to begin a 3-second scan of your surroundings.")
+st.write("Click **START** in the component below to begin a 3-second scan of your surroundings.")
+
+# RTC_CONFIGURATION is the fix for the connection error.
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
 # The WebRTC component that displays the video stream
 webrtc_ctx = webrtc_streamer(
     key="raahi-scanner",
     mode=WebRtcMode.SENDRECV,
+    rtc_configuration=RTC_CONFIGURATION,
     video_frame_callback=video_frame_callback,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
 
-# A button to start the scanning process
-if st.button("Start Scan", key="start_button"):
+# This logic starts the scan when the user clicks the "START" button inside the component.
+if webrtc_ctx.state.playing and not st.session_state.is_scanning and not st.session_state.scan_completed:
     st.session_state.is_scanning = True
     st.session_state.scan_start_time = time.time()
     # Clear previous results
-    while not st.session_state.detected_objects.empty():
-        st.session_state.detected_objects.get()
+    with st.session_state.detected_objects.mutex:
+        st.session_state.detected_objects.queue.clear()
     st.info("📷 Scanning for 3 seconds...")
+    # Use a rerun to update the UI immediately
+    st.rerun()
 
-# Display results after scanning
-if not st.session_state.is_scanning and st.session_state.scan_start_time > 0:
+# Display results after the scan is marked as completed
+if st.session_state.scan_completed:
     st.success("✅ Scan Complete!")
     
     # Collect all results from the queue
@@ -92,7 +104,7 @@ if not st.session_state.is_scanning and st.session_state.scan_start_time > 0:
         seen_summaries = set()
         for full_desc in all_detections:
             parts = full_desc.split(' ')
-            summary_key = f"{parts[0]} at your {parts[-1]}" # e.g., "person at your center"
+            summary_key = f"{parts[0]} at your {parts[-1]}"
             if summary_key not in seen_summaries:
                 unique_summaries.append(f"a {summary_key}")
                 seen_summaries.add(summary_key)
@@ -111,5 +123,6 @@ if not st.session_state.is_scanning and st.session_state.scan_start_time > 0:
         st.warning("⚠️ No objects detected.")
         speak_text("I did not detect any objects.")
     
-    # Reset the scan start time to prevent re-displaying results on rerun
+    # Reset the state so the user can scan again
+    st.session_state.scan_completed = False
     st.session_state.scan_start_time = 0
